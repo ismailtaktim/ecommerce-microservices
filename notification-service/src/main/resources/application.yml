@@ -1,14 +1,14 @@
 server:
-  port: 8084
+  port: 8086
 
 spring:
   application:
-    name: inventory-service
+    name: notification-service
 
   datasource:
-    url: jdbc:postgresql://localhost:5434/inventory_db
-    username: inventory_user
-    password: inventory_pass
+    url: jdbc:postgresql://localhost:5436/notification_db
+    username: notification_user
+    password: notification_pass
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -17,16 +17,13 @@ spring:
     show-sql: true
     properties:
       hibernate:
-        format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
 
   kafka:
     bootstrap-servers: localhost:9092
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      group-id: inventory-service
+      group-id: notification-service
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
@@ -35,4 +32,10 @@ spring:
 
 logging:
   level:
-    com.ecommerce.inventory: DEBUG
+    com.ecommerce.notification: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

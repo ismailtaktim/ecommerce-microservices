@@ -5,26 +5,31 @@ import com.ecommerce.payment.entity.PaymentMethod;
 import com.ecommerce.payment.entity.PaymentStatus;
 import com.ecommerce.payment.event.PaymentCompletedEvent;
 import com.ecommerce.payment.event.PaymentRequestEvent;
+import com.ecommerce.payment.exception.PaymentDeclinedException;
 import com.ecommerce.payment.kafka.PaymentKafkaProducer;
 import com.ecommerce.payment.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Random;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@EnableScheduling
 public class PaymentServiceImpl implements PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final PaymentKafkaProducer kafkaProducer;
-    private final Random random = new Random();
+    private final BankService bankService;
+
+    private static final int MAX_RETRY_COUNT = 5;
 
     @Override
     @Transactional
@@ -49,28 +54,84 @@ public class PaymentServiceImpl implements PaymentService {
 
         payment = paymentRepository.save(payment);
 
-        // Ödeme simülasyonu
-        boolean paymentSuccess = simulatePaymentProcessing();
+        // Banka çağrısı
+        return processBankPayment(payment);
+    }
 
-        if (paymentSuccess) {
-            payment.setStatus(PaymentStatus.COMPLETED);
-            payment.setTransactionRef(generateTransactionId());
-            payment.setProcessedAt(LocalDateTime.now());
-            log.info("Ödeme başarılı: orderId={}, transactionRef={}",
-                    event.getOrderId(), payment.getTransactionRef());
-        } else {
+    private Payment processBankPayment(Payment payment) {
+        try {
+            BankResponse response = bankService.charge("4111111111111111", payment.getAmount());
+
+            if (response.isSuccess()) {
+                payment.setStatus(PaymentStatus.COMPLETED);
+                payment.setTransactionRef(response.getTransactionId());
+                payment.setProcessedAt(LocalDateTime.now());
+                log.info("Ödeme başarılı: orderId={}, transactionRef={}",
+                        payment.getOrderId(), payment.getTransactionRef());
+            } else if (response.isRetryLater()) {
+                // Banka geçici hatası - kuyruğa al
+                payment.setStatus(PaymentStatus.PENDING);
+                payment.setRetryCount(payment.getRetryCount() + 1);
+                payment.setNextRetryAt(LocalDateTime.now().plusMinutes(5));
+                payment.setLastError(response.getMessage());
+                log.warn("Ödeme kuyruğa alındı: orderId={}, nextRetry={}",
+                        payment.getOrderId(), payment.getNextRetryAt());
+
+                // Event gönderme - beklemede
+                payment = paymentRepository.save(payment);
+                return payment; // Event göndermiyoruz, retry edilecek
+            } else {
+                // Kart reddedildi
+                payment.setStatus(PaymentStatus.FAILED);
+                payment.setFailureReason(response.getErrorCode());
+                payment.setFailureMessage(response.getMessage());
+                log.error("Ödeme reddedildi: orderId={}, reason={}",
+                        payment.getOrderId(), response.getErrorCode());
+            }
+
+        } catch (PaymentDeclinedException e) {
             payment.setStatus(PaymentStatus.FAILED);
-            payment.setFailureReason("BANK_REJECTED");
-            payment.setFailureMessage("Ödeme işlemi başarısız - Banka reddi");
-            log.error("Ödeme başarısız: orderId={}", event.getOrderId());
+            payment.setFailureReason(e.getDeclineCode());
+            payment.setFailureMessage(e.getMessage());
+            log.error("Ödeme reddedildi: orderId={}", payment.getOrderId());
+        } catch (Exception e) {
+            // Beklenmeyen hata - kuyruğa al
+            payment.setStatus(PaymentStatus.PENDING);
+            payment.setRetryCount(payment.getRetryCount() + 1);
+            payment.setNextRetryAt(LocalDateTime.now().plusMinutes(5));
+            payment.setLastError(e.getMessage());
+            log.error("Beklenmeyen hata, kuyruğa alındı: {}", e.getMessage());
+
+            payment = paymentRepository.save(payment);
+            return payment;
         }
 
         payment = paymentRepository.save(payment);
-
-        // Event gönder
         sendPaymentCompletedEvent(payment);
-
         return payment;
+    }
+
+    @Scheduled(fixedDelay = 60000) // Her 1 dakikada bir
+    @Transactional
+    public void retryPendingPayments() {
+        List<Payment> pendingPayments = paymentRepository
+                .findByStatusAndNextRetryAtBefore(PaymentStatus.PENDING, LocalDateTime.now());
+
+        for (Payment payment : pendingPayments) {
+            if (payment.getRetryCount() >= MAX_RETRY_COUNT) {
+                // Maksimum deneme aşıldı
+                payment.setStatus(PaymentStatus.FAILED);
+                payment.setFailureReason("MAX_RETRY_EXCEEDED");
+                payment.setFailureMessage("Maksimum deneme sayısı aşıldı");
+                paymentRepository.save(payment);
+                sendPaymentCompletedEvent(payment);
+                log.error("Ödeme başarısız - max retry: orderId={}", payment.getOrderId());
+            } else {
+                log.info("Ödeme retry ediliyor: orderId={}, attempt={}",
+                        payment.getOrderId(), payment.getRetryCount() + 1);
+                processBankPayment(payment);
+            }
+        }
     }
 
     @Override
@@ -86,8 +147,6 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         payment.setStatus(PaymentStatus.REFUNDED);
-        // Not: refund işlemi ayrı refunds tablosunda yapılmalı
-
         return paymentRepository.save(payment);
     }
 
@@ -100,20 +159,6 @@ public class PaymentServiceImpl implements PaymentService {
     @Override
     public List<Payment> getPaymentsByCustomerId(UUID customerId) {
         return paymentRepository.findByCustomerId(customerId);
-    }
-
-    private boolean simulatePaymentProcessing() {
-        // %90 başarı oranı simülasyonu
-        try {
-            Thread.sleep(500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        return random.nextInt(100) < 90;
-    }
-
-    private String generateTransactionId() {
-        return "TXN-" + System.currentTimeMillis() + "-" + random.nextInt(10000);
     }
 
     private void sendPaymentCompletedEvent(Payment payment) {

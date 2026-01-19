@@ -74,8 +74,26 @@ public class OrderServiceImpl implements OrderService {
         // 5. Durum geçmişine ekle
         saveStatusHistory(order, null, OrderStatus.PENDING, "Sipariş oluşturuldu");
 
+        // Order created event gönder (Notification Service için)
+        publishOrderCreatedEvent(order);
+
         log.info("Sipariş oluşturuldu: OrderNumber={}", order.getOrderNumber());
         return orderMapper.toResponse(order);
+    }
+
+    private void publishOrderCreatedEvent(Order order) {
+        OrderCreatedEvent event = OrderCreatedEvent.builder()
+                .orderId(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .customerId(order.getCustomerId())
+                .customerEmail(order.getCustomerEmail())
+                .customerPhone(order.getCustomerPhone())
+                .totalAmount(order.getTotalAmount())
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        outboxService.saveEvent("ORDER", order.getId(), TOPIC_ORDER_CREATED, event);
+        log.info("Order created event gönderildi: {}", order.getOrderNumber());
     }
 
     @Override
@@ -258,6 +276,9 @@ public class OrderServiceImpl implements OrderService {
                 .orderId(order.getId())
                 .orderNumber(order.getOrderNumber())
                 .customerId(order.getCustomerId())
+                .customerEmail(order.getCustomerEmail())
+                .customerPhone(order.getCustomerPhone())
+                .totalAmount(order.getTotalAmount())
                 .reason(reason)
                 .cancelledAt(LocalDateTime.now())
                 .build();
@@ -347,11 +368,13 @@ public class OrderServiceImpl implements OrderService {
                 .orderNumber(order.getOrderNumber())
                 .customerId(order.getCustomerId())
                 .customerEmail(order.getCustomerEmail())
+                .customerPhone(order.getCustomerPhone())
                 .totalAmount(order.getTotalAmount())
                 .completedAt(LocalDateTime.now())
                 .build();
 
         outboxService.saveEvent("ORDER", order.getId(), TOPIC_ORDER_COMPLETED, event);
+        log.info("Order completed event gönderildi: {}", order.getOrderNumber());
     }
 
     private void publishOrderCancelledEvent(Order order, String reason) {
@@ -359,6 +382,9 @@ public class OrderServiceImpl implements OrderService {
                 .orderId(order.getId())
                 .orderNumber(order.getOrderNumber())
                 .customerId(order.getCustomerId())
+                .customerEmail(order.getCustomerEmail())
+                .customerPhone(order.getCustomerPhone())
+                .totalAmount(order.getTotalAmount())
                 .reason(reason)
                 .cancelledAt(LocalDateTime.now())
                 .build();

@@ -5,6 +5,7 @@ import com.ecommerce.payment.entity.PaymentStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,4 +16,5 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findByCustomerId(UUID customerId);
     List<Payment> findByStatus(PaymentStatus status);
     boolean existsByOrderId(UUID orderId);
+    List<Payment> findByStatusAndNextRetryAtBefore(PaymentStatus status, LocalDateTime time);
 }

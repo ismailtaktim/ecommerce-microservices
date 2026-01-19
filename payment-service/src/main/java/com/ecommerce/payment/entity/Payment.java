@@ -63,6 +63,16 @@ public class Payment {
     @Column(name = "processed_at")
     private LocalDateTime processedAt;
 
+    @Column(name = "retry_count")
+    @Builder.Default
+    private Integer retryCount = 0;
+
+    @Column(name = "next_retry_at")
+    private LocalDateTime nextRetryAt;
+
+    @Column(name = "last_error")
+    private String lastError;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

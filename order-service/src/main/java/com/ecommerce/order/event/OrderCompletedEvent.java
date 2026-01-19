@@ -19,6 +19,7 @@ public class OrderCompletedEvent {
     private String orderNumber;
     private UUID customerId;
     private String customerEmail;
+    private String customerPhone;
     private BigDecimal totalAmount;
     private LocalDateTime completedAt;
 }
